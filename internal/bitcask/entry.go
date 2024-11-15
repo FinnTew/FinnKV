@@ -5,11 +5,20 @@ import (
 	"hash/crc32"
 )
 
+const (
+	EntryTypePut      byte = 0 // 插入操作
+	EntryTypeDelete   byte = 1 // 删除操作
+	EntryTypeTxnBegin byte = 2 // 事务开始
+	EntryTypeTxnEnd   byte = 3 // 事务结束
+)
+
 // Entry 表示一个数据条目
 type Entry struct {
 	Key       []byte
 	Value     []byte
 	Timestamp int64
+	Type      byte  // 操作类型
+	TxnID     int64 // 事务 ID
 }
 
 // Encode 将 Entry 编码为字节数组
@@ -17,45 +26,98 @@ func (e *Entry) Encode() []byte {
 	keySize := int32(len(e.Key))
 	valueSize := int32(len(e.Value))
 
-	buf := make([]byte, 4+8+4+4+keySize+valueSize)
+	// 计算总长度
+	totalSize := 4 + 1 + 8 + 8 + 4 + 4 + keySize + valueSize
+	buf := make([]byte, totalSize)
+	offset := 0
+
 	// 校验和占位，稍后填充
-	binary.BigEndian.PutUint32(buf[0:4], 0)
+	binary.BigEndian.PutUint32(buf[offset:], 0)
+	offset += 4
+
+	// 操作类型
+	buf[offset] = e.Type
+	offset += 1
+
 	// 时间戳
-	binary.BigEndian.PutUint64(buf[4:12], uint64(e.Timestamp))
+	binary.BigEndian.PutUint64(buf[offset:], uint64(e.Timestamp))
+	offset += 8
+
+	// 事务 ID
+	binary.BigEndian.PutUint64(buf[offset:], uint64(e.TxnID))
+	offset += 8
+
 	// Key 和 Value 的大小
-	binary.BigEndian.PutUint32(buf[12:16], uint32(keySize))
-	binary.BigEndian.PutUint32(buf[16:20], uint32(valueSize))
-	// Key 和 Value
-	copy(buf[20:20+keySize], e.Key)
-	copy(buf[20+keySize:], e.Value)
+	binary.BigEndian.PutUint32(buf[offset:], uint32(keySize))
+	offset += 4
+	binary.BigEndian.PutUint32(buf[offset:], uint32(valueSize))
+	offset += 4
+
+	// Key
+	copy(buf[offset:], e.Key)
+	offset += int(keySize)
+
+	// Value
+	copy(buf[offset:], e.Value)
+
 	// 计算校验和
 	checksum := crc32.ChecksumIEEE(buf[4:])
-	binary.BigEndian.PutUint32(buf[0:4], checksum)
+	binary.BigEndian.PutUint32(buf[0:], checksum)
+
 	return buf
 }
 
 // DecodeEntry 从字节数组解码为 Entry
 func DecodeEntry(buf []byte) (*Entry, error) {
-	if len(buf) < 20 {
+	if len(buf) < 25 { // 4 + 1 + 8 + 8 + 4 + 4 = 29
 		return nil, ErrInvalidEntry
 	}
-	checksum := binary.BigEndian.Uint32(buf[0:4])
+	offset := 0
+
+	// 校验和验证
+	checksum := binary.BigEndian.Uint32(buf[offset:])
+	offset += 4
 	calcChecksum := crc32.ChecksumIEEE(buf[4:])
 	if checksum != calcChecksum {
 		return nil, ErrInvalidChecksum
 	}
-	timestamp := int64(binary.BigEndian.Uint64(buf[4:12]))
-	keySize := binary.BigEndian.Uint32(buf[12:16])
-	valueSize := binary.BigEndian.Uint32(buf[16:20])
-	if int(20+keySize+valueSize) != len(buf) {
+
+	// 操作类型
+	entryType := buf[offset]
+	offset += 1
+
+	// 时间戳
+	timestamp := int64(binary.BigEndian.Uint64(buf[offset:]))
+	offset += 8
+
+	// 事务 ID
+	txnID := int64(binary.BigEndian.Uint64(buf[offset:]))
+	offset += 8
+
+	// Key 和 Value 的大小
+	keySize := binary.BigEndian.Uint32(buf[offset:])
+	offset += 4
+	valueSize := binary.BigEndian.Uint32(buf[offset:])
+	offset += 4
+
+	totalSize := offset + int(keySize) + int(valueSize)
+	if totalSize != len(buf) {
 		return nil, ErrInvalidEntry
 	}
-	key := buf[20 : 20+keySize]
-	value := buf[20+keySize:]
+
+	// Key
+	key := buf[offset : offset+int(keySize)]
+	offset += int(keySize)
+
+	// Value
+	value := buf[offset:]
+
 	return &Entry{
 		Key:       key,
 		Value:     value,
 		Timestamp: timestamp,
+		Type:      entryType,
+		TxnID:     txnID,
 	}, nil
 }
 

@@ -1,7 +1,6 @@
 package bitcask
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,12 +8,6 @@ import (
 	"sync"
 )
 
-var (
-	ErrInvalidChecksum = errors.New("invalid checksum")
-	ErrInvalidEntry    = errors.New("invalid entry")
-)
-
-// DataFile 表示一个数据文件
 type DataFile struct {
 	sync.Mutex
 	File     *os.File

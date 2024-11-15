@@ -1,7 +1,6 @@
 package bitcask
 
 import (
-	"FinnKV/internal/algo"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -10,17 +9,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"FinnKV/internal/algo"
 )
 
-// Bitcask 引擎结构
 type Bitcask struct {
 	sync.RWMutex
-	dir     string
-	options *Options
-	//dataFiles map[int64]*DataFile
+	dir       string
+	options   *Options
 	dataFiles *algo.SkipList[int64, *DataFile]
 	currFile  *DataFile
-	//index     map[string]*EntryMetadata
 	index     *algo.SkipList[string, *EntryMetadata]
 	maxFileID int64
 	writable  bool
@@ -39,15 +37,11 @@ func Open(dir string, opts ...Option) (*Bitcask, error) {
 	}
 
 	bc := &Bitcask{
-		dir:     dir,
-		options: options,
-		dataFiles: algo.NewSkipList[int64, *DataFile](func(a, b int64) bool {
-			return a < b
-		}),
-		index: algo.NewSkipList[string, *EntryMetadata](func(a, b string) bool {
-			return a < b
-		}),
-		writable: options.ReadWrite,
+		dir:       dir,
+		options:   options,
+		dataFiles: algo.NewSkipList[int64, *DataFile](func(a, b int64) bool { return a < b }),
+		index:     algo.NewSkipList[string, *EntryMetadata](func(a, b string) bool { return a < b }),
+		writable:  options.ReadWrite,
 	}
 	err = bc.loadDataFiles()
 	if err != nil {
@@ -56,7 +50,7 @@ func Open(dir string, opts ...Option) (*Bitcask, error) {
 	return bc, nil
 }
 
-// 加载数据文件并重建内存索引
+// loadDataFiles 加载数据文件并重建内存索引
 func (bc *Bitcask) loadDataFiles() error {
 	files, err := os.ReadDir(bc.dir)
 	if err != nil {
@@ -75,7 +69,6 @@ func (bc *Bitcask) loadDataFiles() error {
 		if err != nil {
 			return err
 		}
-		//bc.dataFiles[fileID] = df
 		bc.dataFiles.Add(fileID, df)
 		if fileID > bc.maxFileID {
 			bc.maxFileID = fileID
@@ -92,13 +85,12 @@ func (bc *Bitcask) loadDataFiles() error {
 			return err
 		}
 		bc.currFile = currFile
-		//bc.dataFiles[bc.maxFileID] = currFile
 		bc.dataFiles.Add(bc.maxFileID, currFile)
 	}
 	return nil
 }
 
-// 从数据文件构建内存索引
+// buildIndex 从数据文件构建内存索引
 func (bc *Bitcask) buildIndex(df *DataFile) error {
 	var offset int64 = 0
 	fileInfo, err := df.File.Stat()
@@ -107,17 +99,19 @@ func (bc *Bitcask) buildIndex(df *DataFile) error {
 	}
 	fileSize := fileInfo.Size()
 	for offset < fileSize {
-		headerBuf := make([]byte, 20)
+		headerBuf := make([]byte, 29) // 4 + 1 + 8 + 8 + 4 + 4
 		_, err := df.File.ReadAt(headerBuf, offset)
 		if err != nil {
 			return err
 		}
 		checksum := binary.BigEndian.Uint32(headerBuf[0:4])
-		timestamp := int64(binary.BigEndian.Uint64(headerBuf[4:12]))
-		keySize := binary.BigEndian.Uint32(headerBuf[12:16])
-		valueSize := binary.BigEndian.Uint32(headerBuf[16:20])
+		entryType := headerBuf[4]
+		timestamp := int64(binary.BigEndian.Uint64(headerBuf[5:13]))
+		//txnID := int64(binary.BigEndian.Uint64(headerBuf[13:21]))
+		keySize := binary.BigEndian.Uint32(headerBuf[21:25])
+		valueSize := binary.BigEndian.Uint32(headerBuf[25:29])
 
-		entrySize := int64(20 + keySize + valueSize)
+		entrySize := int64(29 + keySize + valueSize)
 		buf := make([]byte, entrySize)
 		_, err = df.File.ReadAt(buf, offset)
 		if err != nil {
@@ -127,20 +121,18 @@ func (bc *Bitcask) buildIndex(df *DataFile) error {
 		if checksum != calcChecksum {
 			return ErrInvalidChecksum
 		}
-		key := buf[20 : 20+keySize]
+		key := buf[29 : 29+keySize]
 		// 构建内存索引
-		//bc.index[string(key)] = &EntryMetadata{
-		//	FileID:    df.FileID,
-		//	Offset:    offset,
-		//	Size:      entrySize,
-		//	Timestamp: timestamp,
-		//}
-		bc.index.Add(string(key), &EntryMetadata{
-			FileID:    df.FileID,
-			Offset:    offset,
-			Size:      entrySize,
-			Timestamp: timestamp,
-		})
+		if entryType == EntryTypePut {
+			bc.index.Add(string(key), &EntryMetadata{
+				FileID:    df.FileID,
+				Offset:    offset,
+				Size:      entrySize,
+				Timestamp: timestamp,
+			})
+		} else if entryType == EntryTypeDelete {
+			bc.index.Del(string(key))
+		}
 		offset += entrySize
 	}
 	return nil
@@ -158,6 +150,8 @@ func (bc *Bitcask) Put(key, value []byte) error {
 		Key:       key,
 		Value:     value,
 		Timestamp: time.Now().Unix(),
+		Type:      EntryTypePut,
+		TxnID:     0, // 非事务操作，TxnID 为 0
 	}
 
 	// 检查当前文件大小，必要时创建新的数据文件
@@ -174,7 +168,6 @@ func (bc *Bitcask) Put(key, value []byte) error {
 		if err != nil {
 			return err
 		}
-		//bc.dataFiles[bc.maxFileID] = bc.currFile
 		bc.dataFiles.Add(bc.maxFileID, bc.currFile)
 	}
 
@@ -183,12 +176,6 @@ func (bc *Bitcask) Put(key, value []byte) error {
 		return err
 	}
 
-	//bc.index[string(key)] = &EntryMetadata{
-	//	FileID:    bc.currFile.FileID,
-	//	Offset:    offset,
-	//	Size:      int64(len(entry.Encode())),
-	//	Timestamp: entry.Timestamp,
-	//}
 	bc.index.Add(string(key), &EntryMetadata{
 		FileID:    bc.currFile.FileID,
 		Offset:    offset,
@@ -207,12 +194,10 @@ func (bc *Bitcask) Get(key []byte) ([]byte, error) {
 	bc.RLock()
 	defer bc.RUnlock()
 
-	//meta, ok := bc.index[string(key)]
 	meta, ok := bc.index.Find(string(key))
 	if !ok {
 		return nil, errors.New("key not found")
 	}
-	//df := bc.dataFiles[meta.FileID]
 	df, ok := bc.dataFiles.Find(meta.FileID)
 	if !ok {
 		return nil, errors.New("key not found")
@@ -220,6 +205,9 @@ func (bc *Bitcask) Get(key []byte) ([]byte, error) {
 	entry, err := df.ReadAt(meta.Offset, meta.Size)
 	if err != nil {
 		return nil, err
+	}
+	if entry.Type == EntryTypeDelete {
+		return nil, errors.New("key not found")
 	}
 	return entry.Value, nil
 }
@@ -232,30 +220,25 @@ func (bc *Bitcask) Delete(key []byte) error {
 	bc.Lock()
 	defer bc.Unlock()
 
-	// 写入一个墓碑（空的值）
+	// 写入一个删除标记的 Entry
 	entry := &Entry{
 		Key:       key,
 		Value:     []byte{},
 		Timestamp: time.Now().Unix(),
+		Type:      EntryTypeDelete,
+		TxnID:     0,
 	}
 
-	offset, err := bc.currFile.Write(entry)
+	_, err := bc.currFile.Write(entry)
 	if err != nil {
 		return err
 	}
 
-	//bc.index[string(key)] = &EntryMetadata{
-	//	FileID:    bc.currFile.FileID,
-	//	Offset:    offset,
-	//	Size:      int64(len(entry.Encode())),
-	//	Timestamp: entry.Timestamp,
-	//}
-	bc.index.Add(string(key), &EntryMetadata{
-		FileID:    bc.currFile.FileID,
-		Offset:    offset,
-		Size:      int64(len(entry.Encode())),
-		Timestamp: entry.Timestamp,
-	})
+	bc.index.Del(string(key))
+
+	if bc.options.SyncOnPut {
+		return bc.currFile.Sync()
+	}
 	return nil
 }
 
@@ -265,9 +248,6 @@ func (bc *Bitcask) ListKeys() ([][]byte, error) {
 	defer bc.RUnlock()
 
 	keys := make([][]byte, 0, bc.index.Len())
-	//for k := range bc.index {
-	//	keys = append(keys, []byte(k))
-	//}
 	iter := bc.index.Iterator()
 	for {
 		key, _, ok := iter()
@@ -279,30 +259,17 @@ func (bc *Bitcask) ListKeys() ([][]byte, error) {
 	return keys, nil
 }
 
-// Fold 遍历所有键值对
+// Fold 遍历所有键值对并累积结果
 func (bc *Bitcask) Fold(fn func(key, value []byte, acc interface{}) interface{}, acc interface{}) interface{} {
 	bc.RLock()
 	defer bc.RUnlock()
 
-	//for k, meta := range bc.index {
-	//	df := bc.dataFiles[meta.FileID]
-	//	entry, err := df.ReadAt(meta.Offset, meta.Size)
-	//	if err != nil {
-	//		continue
-	//	}
-	//	if len(entry.Value) == 0 {
-	//		// 跳过墓碑
-	//		continue
-	//	}
-	//	acc = fn([]byte(k), entry.Value, acc)
-	//}
 	iter := bc.index.Iterator()
 	for {
 		key, meta, ok := iter()
 		if !ok {
 			break
 		}
-		//df := bc.dataFiles[meta.FileID]
 		df, ok := bc.dataFiles.Find(meta.FileID)
 		if !ok {
 			continue
@@ -311,8 +278,7 @@ func (bc *Bitcask) Fold(fn func(key, value []byte, acc interface{}) interface{},
 		if err != nil {
 			continue
 		}
-		if len(entry.Value) == 0 {
-			// 跳过墓碑
+		if entry.Type == EntryTypeDelete {
 			continue
 		}
 		acc = fn([]byte(key), entry.Value, acc)
@@ -320,8 +286,11 @@ func (bc *Bitcask) Fold(fn func(key, value []byte, acc interface{}) interface{},
 	return acc
 }
 
-// Merge 合并数据文件
+// Merge 合并数据文件，清理冗余数据
 func (bc *Bitcask) Merge() error {
+	if !bc.options.ReadWrite {
+		return errors.New("bitcask is read-only")
+	}
 	bc.Lock()
 	defer bc.Unlock()
 
@@ -330,29 +299,6 @@ func (bc *Bitcask) Merge() error {
 	if err != nil {
 		return err
 	}
-
-	//newIndex := make(map[string]*EntryMetadata)
-	//for k, meta := range bc.index {
-	//	df := bc.dataFiles[meta.FileID]
-	//	entry, err := df.ReadAt(meta.Offset, meta.Size)
-	//	if err != nil {
-	//		continue
-	//	}
-	//	if len(entry.Value) == 0 {
-	//		// 跳过墓碑
-	//		continue
-	//	}
-	//	offset, err := tempDataFile.Write(entry)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	newIndex[k] = &EntryMetadata{
-	//		FileID:    tempFileID,
-	//		Offset:    offset,
-	//		Size:      int64(len(entry.Encode())),
-	//		Timestamp: entry.Timestamp,
-	//	}
-	//}
 
 	newIndex := algo.NewSkipList[string, *EntryMetadata](func(a, b string) bool {
 		return a < b
@@ -371,7 +317,7 @@ func (bc *Bitcask) Merge() error {
 		if err != nil {
 			continue
 		}
-		if len(entry.Value) == 0 {
+		if entry.Type == EntryTypeDelete {
 			continue
 		}
 		offset, err := tempDataFile.Write(entry)
@@ -387,17 +333,9 @@ func (bc *Bitcask) Merge() error {
 	}
 
 	// 替换旧的数据文件
-	//for _, df := range bc.dataFiles {
-	//	if err := df.Close(); err != nil {
-	//		return err
-	//	}
-	//	if err := os.Remove(df.File.Name()); err != nil {
-	//		return err
-	//	}
-	//}
-	iterDateFiles := bc.dataFiles.Iterator()
+	iterDataFiles := bc.dataFiles.Iterator()
 	for {
-		_, df, ok := iterDateFiles()
+		_, df, ok := iterDataFiles()
 		if !ok {
 			break
 		}
@@ -409,9 +347,6 @@ func (bc *Bitcask) Merge() error {
 		}
 	}
 
-	//bc.dataFiles = map[int64]*DataFile{
-	//	tempFileID: tempDataFile,
-	//}
 	dataFiles := algo.NewSkipList[int64, *DataFile](func(a, b int64) bool {
 		return a < b
 	})
@@ -436,12 +371,6 @@ func (bc *Bitcask) Close() error {
 	bc.Lock()
 	defer bc.Unlock()
 
-	//for _, df := range bc.dataFiles {
-	//	err := df.Close()
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
 	iter := bc.dataFiles.Iterator()
 	for {
 		_, df, ok := iter()

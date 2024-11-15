@@ -8,26 +8,26 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
-// BloomFilter 布隆过滤器结构体
+// BloomFilter 计数布隆过滤器结构体
 type BloomFilter struct {
-	m    uint       // 位数组大小
-	k    uint       // 哈希函数个数
-	bits []byte     // 位数组
-	lock sync.Mutex // 互斥锁，保证线程安全
+	m      uint       // 位数组大小
+	k      uint       // 哈希函数个数
+	counts []uint32   // 计数器数组
+	lock   sync.Mutex // 互斥锁，保证线程安全
 }
 
-// NewBloomFilter 创建一个新的布隆过滤器
+// NewBloomFilter 创建一个新的计数布隆过滤器
 func NewBloomFilter(n uint, p float64) *BloomFilter {
 	m := optimalM(n, p)
 	k := optimalK(n, m)
 
-	// 初始化位数组
-	bits := make([]byte, m/8+1)
+	// 初始化计数器数组
+	counts := make([]uint32, m)
 
 	return &BloomFilter{
-		m:    m,
-		k:    k,
-		bits: bits,
+		m:      m,
+		k:      k,
+		counts: counts,
 	}
 }
 
@@ -45,14 +45,14 @@ func optimalK(n uint, m uint) uint {
 
 // hashFunctions 生成哈希值列表，使用双哈希技术
 func (bf *BloomFilter) hashFunctions(data []byte) []uint {
-	bf.lock.Lock()
-	defer bf.lock.Unlock()
-
 	hashValues := make([]uint, bf.k)
 
 	// 第一个哈希函数：FNV
 	h1 := fnv.New64()
-	h1.Write(data)
+	_, err := h1.Write(data)
+	if err != nil {
+		return nil
+	}
 	sum1 := h1.Sum64()
 
 	// 第二个哈希函数：MurmurHash
@@ -67,25 +67,40 @@ func (bf *BloomFilter) hashFunctions(data []byte) []uint {
 	return hashValues
 }
 
-// Add 向布隆过滤器中添加元素
+// Add 向计数布隆过滤器中添加元素
 func (bf *BloomFilter) Add(data []byte) {
 	hashValues := bf.hashFunctions(data)
+	bf.lock.Lock()
+	defer bf.lock.Unlock()
+
 	for _, hv := range hashValues {
-		byteIndex := hv / 8
-		bitIndex := hv % 8
-		bf.bits[byteIndex] |= 1 << bitIndex
+		bf.counts[hv]++
 	}
 }
 
-// Contains 检查元素是否可能存在于布隆过滤器中
+// Contains 检查元素是否可能存在于计数布隆过滤器中
 func (bf *BloomFilter) Contains(data []byte) bool {
 	hashValues := bf.hashFunctions(data)
+	bf.lock.Lock()
+	defer bf.lock.Unlock()
+
 	for _, hv := range hashValues {
-		byteIndex := hv / 8
-		bitIndex := hv % 8
-		if bf.bits[byteIndex]&(1<<bitIndex) == 0 {
+		if bf.counts[hv] == 0 {
 			return false
 		}
 	}
 	return true
+}
+
+// Remove 从计数布隆过滤器中删除元素
+func (bf *BloomFilter) Remove(data []byte) {
+	hashValues := bf.hashFunctions(data)
+	bf.lock.Lock()
+	defer bf.lock.Unlock()
+
+	for _, hv := range hashValues {
+		if bf.counts[hv] > 0 {
+			bf.counts[hv]--
+		}
+	}
 }
