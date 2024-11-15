@@ -8,7 +8,6 @@
   - [x] MVCC 
   - [x] 事务
   - [x] BloomFilter 优化
-  - [ ] LRU-K 优化热点数据
   - [ ] Redis 数据结构
     - [ ] String
     - [ ] Hash
