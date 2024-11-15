@@ -1,13 +1,14 @@
 package db
 
 import (
-	"FinnKV/internal/algo"
-	"FinnKV/internal/bitcask"
 	"errors"
-	"log"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"FinnKV/internal/algo"
+	"FinnKV/internal/bitcask"
+	"FinnKV/pkg/logger"
 )
 
 // DB 封装了 Bitcask、布隆过滤器、WAL 和 MVCC
@@ -74,7 +75,7 @@ func (db *DB) Put(key, value []byte) error {
 	defer func(txn *Transaction) {
 		err := txn.Commit()
 		if err != nil {
-			log.Fatal(err)
+			logger.Fatal(err.Error())
 		}
 	}(txn)
 	return txn.Put(key, value)
@@ -103,7 +104,7 @@ func (db *DB) Delete(key []byte) error {
 	defer func(txn *Transaction) {
 		err := txn.Commit()
 		if err != nil {
-			log.Fatal(err)
+			logger.Fatal(err.Error())
 		}
 	}(txn)
 	return txn.Delete(key)
@@ -136,7 +137,7 @@ func (db *DB) Recover() error {
 			if err := db.bitcask.Delete(entry.Key); err != nil {
 				return err
 			}
-			// 从布隆过滤器中无法删除，只能在数据层处理
+			db.bloom.Remove(entry.Key)
 		}
 	}
 
@@ -148,9 +149,16 @@ func (db *DB) Close() error {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
+	// 合并数据文件
+	if err := db.bitcask.Merge(); err != nil {
+		return err
+	}
+
+	// 关闭 WAL
 	if err := db.wal.Close(); err != nil {
 		return err
 	}
 
+	// 关闭底层存储
 	return db.bitcask.Close()
 }

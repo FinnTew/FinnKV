@@ -1,10 +1,9 @@
 package db
 
 import (
+	"FinnKV/internal/bitcask"
 	"errors"
 	"sync"
-
-	"FinnKV/internal/bitcask"
 )
 
 // Transaction 表示一个事务
@@ -109,17 +108,23 @@ func (tx *Transaction) Commit() error {
 
 	// 将数据写入底层存储和布隆过滤器
 	for k, v := range tx.writes {
+		key := []byte(k)
 		if v == nil {
-			if err := tx.db.bitcask.Delete([]byte(k)); err != nil {
+			if err := tx.db.bitcask.Delete(key); err != nil {
 				return err
 			}
-			// 布隆过滤器通常不支持删除，此处省略
+			tx.db.bloom.Remove(key) // 从布隆过滤器中删除
 		} else {
-			if err := tx.db.bitcask.Put([]byte(k), v); err != nil {
+			if err := tx.db.bitcask.Put(key, v); err != nil {
 				return err
 			}
-			tx.db.bloom.Add([]byte(k))
+			tx.db.bloom.Add(key) // 添加到布隆过滤器
 		}
+	}
+
+	// 同步底层存储
+	if err := tx.db.bitcask.Sync(); err != nil {
+		return err
 	}
 
 	// 清理 MVCC 中的版本

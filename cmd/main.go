@@ -3,8 +3,8 @@ package main
 import (
 	"FinnKV/internal/bitcask"
 	"FinnKV/internal/db"
+	"FinnKV/pkg/logger"
 	"fmt"
-	"log"
 )
 
 func main() {
@@ -24,11 +24,11 @@ func main() {
 	databaseDir := "./data"
 	myDB, err := db.Open(databaseDir, bitcaskOptions, dbOptions)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to open database: %v", err))
 	}
 	defer func() {
 		if err := myDB.Close(); err != nil {
-			log.Fatalf("Failed to close database: %v", err)
+			logger.Fatal(fmt.Sprintf("Failed to close database: %v", err))
 		}
 	}()
 
@@ -38,30 +38,30 @@ func main() {
 
 	// 写入数据
 	if err := myDB.Put(key, value); err != nil {
-		log.Fatalf("Failed to put data: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to put key: %v", err))
 	}
-	fmt.Printf("Put key: %s, value: %s\n", key, value)
+	logger.Info(fmt.Sprintf("Successfully put key: %v", string(key)))
 
 	// 读取数据
 	readValue, err := myDB.Get(key)
 	if err != nil {
-		log.Fatalf("Failed to get data: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to get key: %v", err))
 	}
-	fmt.Printf("Get key: %s, value: %s\n", key, readValue)
+	logger.Info(fmt.Sprintf("Successfully get value: %v", string(readValue)))
 
 	// 删除数据
 	if err := myDB.Delete(key); err != nil {
-		log.Fatalf("Failed to delete data: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to delete key: %v", err))
 	}
-	fmt.Printf("Deleted key: %s\n", key)
+	logger.Info(fmt.Sprintf("Successfully delete key: %v", string(key)))
 
 	// 尝试读取被删除的数据
-	readValue, err = myDB.Get(key)
-	if err != nil {
-		fmt.Printf("Key %s has been deleted.\n", key)
-	} else {
-		fmt.Printf("Get key: %s, value: %s\n", key, readValue)
-	}
+	//readValue, err = myDB.Get(key)
+	//if err != nil {
+	//	logger.Fatal(fmt.Sprintf("Failed to get key: %v", err))
+	//} else {
+	//	logger.Info(fmt.Sprintf("Successfully get value: %v", string(readValue)))
+	//}
 
 	// 使用事务
 	txn := myDB.BeginTransaction()
@@ -70,29 +70,29 @@ func main() {
 	txnKey := []byte("txn_key")
 	txnValue := []byte("txn_value")
 	if err := txn.Put(txnKey, txnValue); err != nil {
-		log.Fatalf("Failed to put data in transaction: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to put key: %v", err))
 	}
-	fmt.Printf("Transaction Put key: %s, value: %s\n", txnKey, txnValue)
+	logger.Info(fmt.Sprintf("Successfully put key: %v", string(txnKey)))
 
 	// 在事务中读取数据
 	txnReadValue, err := txn.Get(txnKey)
 	if err != nil {
-		log.Fatalf("Failed to get data in transaction: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to get key: %v", err))
 	}
-	fmt.Printf("Transaction Get key: %s, value: %s\n", txnKey, txnReadValue)
+	logger.Info(fmt.Sprintf("Successfully get value: %v", string(txnReadValue)))
 
 	// 提交事务
 	if err := txn.Commit(); err != nil {
-		log.Fatalf("Failed to commit transaction: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to commit: %v", err))
 	}
-	fmt.Println("Transaction committed.")
+	logger.Info(fmt.Sprintf("Successfully commit: %v", string(txnKey)))
 
 	// 在事务提交后读取数据
 	readValue, err = myDB.Get(txnKey)
 	if err != nil {
-		log.Fatalf("Failed to get data after transaction: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to get key: %v", err))
 	}
-	fmt.Printf("After Transaction Get key: %s, value: %s\n", txnKey, readValue)
+	logger.Info(fmt.Sprintf("Successfully get value: %v", string(readValue)))
 
 	// 演示事务回滚
 	txn2 := myDB.BeginTransaction()
@@ -100,22 +100,22 @@ func main() {
 	rollbackValue := []byte("rollback_value")
 
 	if err := txn2.Put(rollbackKey, rollbackValue); err != nil {
-		log.Fatalf("Failed to put data in transaction: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to put key: %v", err))
 	}
-	fmt.Printf("Transaction Put key: %s, value: %s\n", rollbackKey, rollbackValue)
+	logger.Info(fmt.Sprintf("Successfully put key: %v", string(txnKey)))
 
 	// 回滚事务
 	if err := txn2.Rollback(); err != nil {
-		log.Fatalf("Failed to rollback transaction: %v", err)
+		logger.Fatal(fmt.Sprintf("Failed to rollback: %v", err))
 	}
-	fmt.Println("Transaction rolled back.")
+	logger.Info(fmt.Sprintf("Successfully rollback key: %v", string(txnKey)))
 
 	// 尝试读取被回滚的数据
 	readValue, err = myDB.Get(rollbackKey)
 
 	if err != nil {
-		fmt.Printf("Key %s does not exist after rollback.\n", rollbackKey)
+		logger.Fatal(fmt.Sprintf("Failed to get rollback key: %v", err))
 	} else {
-		fmt.Printf("Get key: %s, value: %s\n", rollbackKey, readValue)
+		logger.Info(fmt.Sprintf("Successfully get value: %v", string(readValue)))
 	}
 }
