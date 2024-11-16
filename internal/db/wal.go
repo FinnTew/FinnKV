@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -126,7 +127,20 @@ func (wal *WAL) Clear() error {
 	return err
 }
 
+func safeClose(file *os.File) error {
+	if err := file.Close(); err != nil {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			if errors.Is(pathErr.Err, os.ErrClosed) {
+				return nil
+			}
+		}
+		return err
+	}
+	return nil
+}
+
 // Close 关闭 WAL 文件
 func (wal *WAL) Close() error {
-	return wal.file.Close()
+	return safeClose(wal.file)
 }

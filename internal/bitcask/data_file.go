@@ -1,6 +1,7 @@
 package bitcask
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -64,9 +65,22 @@ func (df *DataFile) ReadAt(offset int64, size int64) (*Entry, error) {
 	return DecodeEntry(buf)
 }
 
+func safeClose(file *os.File) error {
+	if err := file.Close(); err != nil {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			if errors.Is(pathErr.Err, os.ErrClosed) {
+				return nil
+			}
+		}
+		return err
+	}
+	return nil
+}
+
 // Close 关闭数据文件
 func (df *DataFile) Close() error {
-	return df.File.Close()
+	return safeClose(df.File)
 }
 
 // Sync 将数据文件同步到磁盘
